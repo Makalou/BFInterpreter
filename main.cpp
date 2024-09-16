@@ -1,6 +1,9 @@
 #include <cstdio>
 #include <vector>
+#include <fstream>
+#include <sstream>
 #include <string>
+#include <iostream>
 
 /*
  * >  move the pointer right
@@ -25,10 +28,26 @@ void need_to_access_cell(unsigned long cell)
 
 int main(int argc, char* argv[])
 {
+    if (argc != 2) {
+        std::cerr << "Usage: " << argv[0] << " <filename>" << std::endl;
+        return 1; 
+    }
+
+    std::string filename = argv[1]; 
+
+    std::ifstream inFile(filename);  
+
+    if (!inFile) {
+        std::cerr << "Unable to open file: " << filename << std::endl;
+        return 1; 
+    }
+
+    std::stringstream buffer;
+    buffer << inFile.rdbuf();
+
+    std::string instructions = buffer.str();  // Convert the buffer into a string
+
     unsigned long cell_pointer = 0;
-
-    std::string instructions = "++++++++[>++++[>++>+++>+++>+<<<<-]>+>+>->>+[<]<-]>>.>---.+++++++..+++.>>.<-.<.+++.------.--------.>>+.>++.";
-
     unsigned long program_counter = 0;
 
     while(program_counter < instructions.size())
@@ -60,6 +79,7 @@ int main(int argc, char* argv[])
             tape[cell_pointer] = tape[cell_pointer + 1];
             break;
         case '[':
+            need_to_access_cell(cell_pointer);
             if (tape[cell_pointer] == 0)
             {
                 bool find_matched = false;
@@ -85,6 +105,7 @@ int main(int argc, char* argv[])
             }
             break;
         case ']':
+            need_to_access_cell(cell_pointer);
             if (tape[cell_pointer] != 0)
             {
                 bool find_matched = false;
