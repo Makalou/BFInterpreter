@@ -22,7 +22,7 @@ void need_to_access_cell(unsigned long cell)
 {
     if (cell >= tape.size())
     {
-        tape.resize(2 * cell + 1);
+        tape.resize(cell+1);
     }
 }
 
