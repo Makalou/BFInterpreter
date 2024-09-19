@@ -16,5 +16,5 @@ cmake ..
 ```
 ## Usage
 ```bash
-bfi <filename>
+bfi [-p] <filename> // -p enable profile
 ```
