@@ -143,7 +143,10 @@ int main(int argc, char* argv[])
             need_to_access_cell(cell_pointer);
             if (tape[cell_pointer] == 0)
             {
-                instruction_count_table[6]++;
+                if(enable_profile)
+                {
+                    instruction_count_table[6]++;
+                }
                 bool find_matched = false;
                 unsigned int jump_markers = 1;
                 for (unsigned long i = program_counter + 1; i < instructions.size(); i++)
