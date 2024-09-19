@@ -5,7 +5,7 @@
 #include <sstream>
 #include <string>
 #include <iostream>
-
+#include <algorithm>
 /*
  * >  move the pointer right
  * <  move the pointer left
@@ -28,6 +28,17 @@ void need_to_access_cell(unsigned long cell)
 }
 
 unsigned int instruction_count_table[8];
+
+struct loop_profile
+{
+    unsigned long start;
+    unsigned long end;
+    unsigned long iter;
+
+    loop_profile(unsigned long _start,
+    unsigned long _end,
+    unsigned long _iter):start(_start),end(_end),iter(_iter){};
+};
 
 int main(int argc, char* argv[])
 {
@@ -53,6 +64,12 @@ int main(int argc, char* argv[])
     unsigned long cell_pointer = 0;
     unsigned long program_counter = 0;
 
+    std::vector<loop_profile> simple_innermost_loops;
+    std::vector<loop_profile> innermost_loops;
+    loop_profile current_loop(-1,-1,0);
+    unsigned long is_simple_loop = false;
+    unsigned long p_change = 0;
+
     while(program_counter < instructions.size())
     {
         char current_inst = instructions[program_counter];
@@ -61,31 +78,37 @@ int main(int argc, char* argv[])
         case '>':
             instruction_count_table[0]++;
             cell_pointer++;
+            is_simple_loop = false;
             break;
         case '<':
             instruction_count_table[1]++;
             cell_pointer--;
+            is_simple_loop = false;
             break;
         case '+':
             need_to_access_cell(cell_pointer);
             instruction_count_table[2]++;
             tape[cell_pointer]++;
+            p_change++;
             break;
         case '-':
             need_to_access_cell(cell_pointer);
             instruction_count_table[3]++;
             tape[cell_pointer]--;
+            p_change--;
             break;
         case '.':
             need_to_access_cell(cell_pointer);
             instruction_count_table[4]++;
             printf("%c", tape[cell_pointer]); // output the value of the current cell
+            is_simple_loop = false;
             break;
         case ',':
             need_to_access_cell(cell_pointer);
             need_to_access_cell(cell_pointer+1);
             instruction_count_table[5]++;
             tape[cell_pointer] = tape[cell_pointer + 1];
+            is_simple_loop = false;
             break;
         case '[':
             need_to_access_cell(cell_pointer);
@@ -132,6 +155,18 @@ int main(int argc, char* argv[])
                         jump_markers--;
                         if (jump_markers == 0)
                         {
+                            if(current_loop.end == program_counter)
+                            {
+                                current_loop.iter ++;
+                            }else{
+                                current_loop.start = i;
+                                current_loop.end = program_counter;
+                                current_loop.iter = 1;
+                            }
+                            //reset loop state
+                            is_simple_loop = true;
+                            p_change = 0;
+
                             program_counter = i - 1; // minus 1 because we inc it at the end of loop
                             find_matched = true;
                             break;
@@ -139,6 +174,47 @@ int main(int argc, char* argv[])
                     }
                 }
                 if (!find_matched) std::abort(); // ] cannot be matched
+            }else{
+                if(current_loop.end == program_counter)
+                {
+                    // found innermost loop
+                    if(is_simple_loop && (p_change == 1 || p_change == -1))
+                    {
+                        bool exist = false;
+                        for(auto & loop : simple_innermost_loops)
+                        {
+                            if(loop.end == current_loop.end)
+                            {
+                                loop.iter = loop.iter + current_loop.iter + 1;
+                                exist = true;
+                                break;
+                            }
+                        }
+                        if(!exist)
+                        {
+                            simple_innermost_loops.emplace_back(current_loop.start,current_loop.end,current_loop.iter + 1);
+                        }
+                    }else{
+                         bool exist = false;
+                        for(auto & loop : innermost_loops)
+                        {
+                            if(loop.end == current_loop.end)
+                            {
+                                loop.iter = loop.iter + current_loop.iter + 1;
+                                exist = true;
+                                break;
+                            }
+                        }
+                        if(!exist)
+                        {
+                            innermost_loops.emplace_back(current_loop.start,current_loop.end,current_loop.iter + 1);
+                        }
+                    }
+                }
+
+                //reset loop state
+                is_simple_loop = true;
+                p_change = 0;
             }
             break;
         default:
@@ -156,4 +232,20 @@ int main(int argc, char* argv[])
     printf(" , :\t%d\n",instruction_count_table[5]);
     printf(" [ :\t%d\n",instruction_count_table[6]);
     printf(" ] :\t%d\n",instruction_count_table[7]);
+    printf("\n");
+    std::sort(simple_innermost_loops.begin(),simple_innermost_loops.end(),[](const auto & a, const auto & b){ return a.iter < b.iter;});
+    std::sort(innermost_loops.begin(),innermost_loops.end(),[](const auto & a, const auto & b){ return a.iter < b.iter;});
+    printf("Simple Innermost Loops:\n");
+    printf("From\tTo\tIterate\n");
+    for(const auto & loop : simple_innermost_loops)
+    {
+        printf("%lu\t%lu\t%lu\n",loop.start,loop.end,loop.iter);
+    }
+    printf("\n");
+    printf("Other Innermost Loops:\n");
+    printf("From\tTo\tIterate\n");
+    for(const auto & loop : innermost_loops)
+    {
+        printf("%lu\t%lu\t%lu\n",loop.start,loop.end,loop.iter);
+    }
 }
