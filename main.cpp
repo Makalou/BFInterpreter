@@ -17,6 +17,8 @@
  * ]  jump to the matching [ instruction if the current value is not zero
 */ 
 
+#define IS_INST(c) (c == '>' || c == '<' || c == '+' || c == '-' || c == '.' || c == ',' || c == '[' || c == ']')
+
 std::vector<unsigned char> tape;
 
 void need_to_access_cell(unsigned long cell)
@@ -37,9 +39,13 @@ struct loop_profile
     unsigned long end;
     unsigned long iter;
 
+    bool is_simple;
+
     loop_profile(unsigned long _start,
     unsigned long _end,
-    unsigned long _iter):start(_start),end(_end),iter(_iter){};
+    unsigned long _iter):start(_start),end(_end),iter(_iter){
+        is_simple = true;
+    };
 };
 
 int main(int argc, char* argv[])
@@ -78,8 +84,9 @@ int main(int argc, char* argv[])
     std::vector<loop_profile> simple_innermost_loops;
     std::vector<loop_profile> innermost_loops;
     loop_profile current_loop(-1,-1,0);
-    unsigned long is_simple_loop = false;
-    unsigned long p_change = 0;
+    int old_pointer = -1;
+    int old_p_0 = -1;
+    bool has_io = false;
 
     while(program_counter < instructions.size())
     {
@@ -91,7 +98,6 @@ int main(int argc, char* argv[])
             if(enable_profile)
             {
                 instruction_count_table[0]++;
-                is_simple_loop = false;
             }
             break;
         case '<':
@@ -99,7 +105,6 @@ int main(int argc, char* argv[])
             if(enable_profile)
             {
                 instruction_count_table[1]++;
-                is_simple_loop = false;
             }
             break;
         case '+':
@@ -108,7 +113,6 @@ int main(int argc, char* argv[])
             if(enable_profile)
             {
                 instruction_count_table[2]++;
-                p_change++;
             }      
             break;
         case '-':
@@ -117,7 +121,6 @@ int main(int argc, char* argv[])
             if(enable_profile)
             {
                 instruction_count_table[3]++;
-                p_change--;
             }
             break;
         case '.':
@@ -126,7 +129,7 @@ int main(int argc, char* argv[])
             if(enable_profile)
             {
                 instruction_count_table[4]++;
-                is_simple_loop = false;
+                has_io = true;
             }  
             break;
         case ',':
@@ -136,7 +139,7 @@ int main(int argc, char* argv[])
             if(enable_profile)
             {
                 instruction_count_table[5]++;
-                is_simple_loop = false;
+                has_io = true;
             }
             break;
         case '[':
@@ -168,6 +171,13 @@ int main(int argc, char* argv[])
                 }
                 if(!find_matched) std::abort(); // [ cannot be matched
             }
+            if(enable_profile)
+            {
+                current_loop.start = program_counter;
+                old_pointer = cell_pointer;
+                old_p_0 = tape[cell_pointer];
+                has_io = false;
+            }
             break;
         case ']':
             need_to_access_cell(cell_pointer);
@@ -189,17 +199,33 @@ int main(int argc, char* argv[])
                         {
                             if(enable_profile)
                             {
-                                if(current_loop.end == program_counter)
+                                if(current_loop.start == i)
                                 {
+                                    // found innermost loop
+                                    if(current_loop.end != program_counter)
+                                    {
+                                        current_loop.end = program_counter;
+                                        current_loop.iter = 0;
+                                    }
                                     current_loop.iter ++;
-                                }else{
-                                    current_loop.start = i;
-                                    current_loop.end = program_counter;
-                                    current_loop.iter = 1;
+
+                                    bool is_simple = true;
+                                    do {
+                                        if(has_io) {
+                                            is_simple = false;
+                                            break;
+                                        }
+                                        if(cell_pointer != old_pointer)
+                                        {
+                                            is_simple = false;
+                                            break;
+                                        }
+                                        auto new_p_0 = tape[cell_pointer];
+                                        if((old_p_0 - 1 != new_p_0) && (old_pointer + 1 != new_p_0))
+                                            is_simple = false;
+                                    }while (0);
+                                    current_loop.is_simple = is_simple;
                                 }
-                                //reset loop state
-                                is_simple_loop = true;
-                                p_change = 0;
                             }
                             program_counter = i - 1; // minus 1 because we inc it at the end of loop
                             find_matched = true;
@@ -214,7 +240,7 @@ int main(int argc, char* argv[])
                     if(current_loop.end == program_counter)
                     {
                         // found innermost loop
-                        if(is_simple_loop && (p_change == 1 || p_change == -1))
+                        if(current_loop.is_simple)
                         {
                             bool exist = false;
                             for(auto & loop : simple_innermost_loops)
@@ -247,10 +273,6 @@ int main(int argc, char* argv[])
                             }
                         }
                     }
-
-                    //reset loop state
-                    is_simple_loop = true;
-                    p_change = 0;
                 }
             }
             break;
@@ -272,20 +294,28 @@ int main(int argc, char* argv[])
         printf(" [ :\t%d\n",instruction_count_table[6]);
         printf(" ] :\t%d\n",instruction_count_table[7]);
         printf("\n");
-        std::sort(simple_innermost_loops.begin(),simple_innermost_loops.end(),[](const auto & a, const auto & b){ return a.iter < b.iter;});
-        std::sort(innermost_loops.begin(),innermost_loops.end(),[](const auto & a, const auto & b){ return a.iter < b.iter;});
+        std::sort(simple_innermost_loops.begin(),simple_innermost_loops.end(),[](const auto & a, const auto & b){ return a.iter > b.iter;});
+        std::sort(innermost_loops.begin(),innermost_loops.end(),[](const auto & a, const auto & b){ return a.iter > b.iter;});
         printf("Simple Innermost Loops:\n");
-        printf("From\tTo\tIterate\n");
         for(const auto & loop : simple_innermost_loops)
         {
-            printf("%lu\t%lu\t%lu\n",loop.start,loop.end,loop.iter);
+            for(auto i = loop.start; i <= loop.end; i ++)
+            {   
+                if(IS_INST(instructions[i]))
+                    printf("%c",instructions[i]);
+            }
+            printf("\t%lu\n",loop.iter);
         }
         printf("\n");
         printf("Other Innermost Loops:\n");
-        printf("From\tTo\tIterate\n");
         for(const auto & loop : innermost_loops)
         {
-            printf("%lu\t%lu\t%lu\n",loop.start,loop.end,loop.iter);
+            for(auto i = loop.start; i <= loop.end; i ++)
+            {
+                if(IS_INST(instructions[i]))
+                    printf("%c",instructions[i]);
+            }
+            printf("\t%lu\n",loop.iter);
         }
     }
 }
