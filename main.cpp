@@ -1,5 +1,7 @@
+#include <cassert>
 #include <cstddef>
 #include <cstdio>
+#include <cstdlib>
 #include <vector>
 #include <fstream>
 #include <sstream>
@@ -19,7 +21,15 @@
 
 #define IS_INST(c) (c == '>' || c == '<' || c == '+' || c == '-' || c == '.' || c == ',' || c == '[' || c == ']')
 
+#define OP_MV 0
+#define OP_INC 1
+#define OP_WRITE 2
+#define OP_READ 3
+#define OP_BRANCH 4
+#define OP_BACK 5
+
 std::vector<unsigned char> tape;
+unsigned long cell_pointer = 0;
 
 void need_to_access_cell(unsigned long cell)
 {
@@ -28,6 +38,13 @@ void need_to_access_cell(unsigned long cell)
         tape.resize(cell+1);
     }
 }
+
+struct instruction
+{
+    int op_code;
+    int operand;
+    instruction(int _code, int _operand) : op_code(_code),operand(_operand){};
+};
 
 bool enable_profile = false;
 
@@ -46,6 +63,190 @@ struct loop_profile
     unsigned long _iter):start(_start),end(_end),iter(_iter){
         is_simple = true;
     };
+};
+
+std::vector<loop_profile> simple_innermost_loops;
+std::vector<loop_profile> innermost_loops;
+
+struct block_executer
+{
+    block_executer(unsigned  long start) : initial_start(start),execute_count(0)
+    {
+        
+    }
+    std::vector<instruction> opt_instructions;
+
+    void push_instruction(int op_code,int operand)
+    {
+        if(!opt_instructions.empty())
+        {
+            if(op_code == OP_MV)
+            {
+                if(opt_instructions.back().op_code == OP_MV)
+                {
+                    opt_instructions.back().operand += operand;
+                    return;
+                }
+            }
+
+            if(op_code == OP_INC)
+            {
+                if(opt_instructions.back().op_code == OP_INC)
+                {
+                    opt_instructions.back().operand += operand;
+                    return;
+                }
+            }
+        }
+
+        opt_instructions.emplace_back(op_code,operand);
+    }
+
+    std::vector<block_executer> children;
+
+    unsigned long initial_start;
+
+    unsigned int execute_count;
+
+    int initial_execute(const std::string& original_instructions)
+    {
+        assert(execute_count == 0);
+        execute_count = 1;
+        auto pc = initial_start;
+        while (pc < original_instructions.size()) {
+            char current_inst = original_instructions[pc];
+            switch (current_inst)
+            {
+            case '>':
+                cell_pointer++;
+                push_instruction(OP_MV, 1);
+                break;
+            case '<':
+                cell_pointer--;
+                push_instruction(OP_MV, -1);
+                break;
+            case '+':
+                need_to_access_cell(cell_pointer);
+                tape[cell_pointer]++;
+                push_instruction(OP_INC, 1);    
+                break;
+            case '-':
+                need_to_access_cell(cell_pointer);
+                tape[cell_pointer]--;
+                push_instruction(OP_INC,-1);
+                break;
+            case '.':
+                need_to_access_cell(cell_pointer);
+                printf("%c", tape[cell_pointer]); // output the value of the current cell 
+                push_instruction(OP_WRITE, 0);
+                break;
+            case ',':
+                need_to_access_cell(cell_pointer);
+                need_to_access_cell(cell_pointer+1);
+                tape[cell_pointer] = tape[cell_pointer + 1];
+                push_instruction(OP_READ, 0);
+                break;
+            case '[':
+                need_to_access_cell(cell_pointer);
+                push_instruction(OP_BRANCH, children.size());
+                children.emplace_back(pc + 1);
+                if(tape[cell_pointer] == 0)
+                {
+                    // skip child block for now
+                    bool find_matched = false;
+                    unsigned int jump_markers = 1;
+                    for (unsigned long i = pc + 1; i < original_instructions.size(); i++)
+                    {
+                        if (original_instructions[i] == '[')
+                        {
+                            jump_markers++;
+                        }
+                        else if (original_instructions[i] == ']')
+                        {
+                            jump_markers--;
+                            if (jump_markers == 0)
+                            {
+                                pc = i;
+                                find_matched = true;
+                                break;
+                            }
+                        }
+                    }
+                    if(!find_matched) std::abort(); // [ cannot be matched
+                }else{
+                    pc = children.back().initial_execute(original_instructions);
+                }
+                break;
+            case ']':
+                need_to_access_cell(cell_pointer);
+                push_instruction(OP_BACK, 0);
+                if (tape[cell_pointer] != 0)
+                {
+                   // use optimized instructions to execute future loop
+                   execute(original_instructions);
+                }
+                return pc;
+            default:
+                break;
+            }
+            pc++;
+        }
+        return pc;
+    }
+
+    void execute(const std::string& original_instructions)
+    {
+        if(opt_instructions.empty())
+        {
+            initial_execute(original_instructions);
+            return;
+        }
+
+        long opt_pc = 0;
+        while(opt_pc < opt_instructions.size())
+        {
+            auto current_inst = opt_instructions[opt_pc];
+            switch (current_inst.op_code)
+            {
+            case OP_MV:
+                cell_pointer += current_inst.operand;
+                break;
+            case OP_INC:
+                need_to_access_cell(cell_pointer);
+                tape[cell_pointer] += current_inst.operand;
+                break;
+            case OP_WRITE:
+                need_to_access_cell(cell_pointer);
+                printf("%c", tape[cell_pointer]); // output the value of the current cell
+                break;
+            case OP_READ:
+                need_to_access_cell(cell_pointer);
+                need_to_access_cell(cell_pointer + 1);
+                tape[cell_pointer] = tape[cell_pointer + 1];
+                break;
+            case OP_BRANCH:
+                need_to_access_cell(cell_pointer);
+                if (tape[cell_pointer] != 0)
+                {
+                    children[current_inst.operand].execute(original_instructions);
+                }
+                break;
+            case OP_BACK:
+                need_to_access_cell(cell_pointer);
+                if (tape[cell_pointer] != 0)
+                {
+                    execute_count ++;
+                    opt_pc = -1;
+                }else{
+                    return;
+                }
+                break;
+            default:
+                std::abort(); //unknown instruction
+            }
+            opt_pc ++;
+        }
+    }
 };
 
 int main(int argc, char* argv[])
@@ -78,209 +279,10 @@ int main(int argc, char* argv[])
 
     std::string instructions = buffer.str();  // Convert the buffer into a string
 
-    unsigned long cell_pointer = 0;
-    unsigned long program_counter = 0;
-
-    std::vector<loop_profile> simple_innermost_loops;
-    std::vector<loop_profile> innermost_loops;
-    loop_profile current_loop(-1,-1,0);
-    int old_pointer = -1;
-    int old_p_0 = -1;
-    bool has_io = false;
-
-    while(program_counter < instructions.size())
-    {
-        char current_inst = instructions[program_counter];
-        switch (current_inst)
-        {
-        case '>':
-            cell_pointer++;
-            if(enable_profile)
-            {
-                instruction_count_table[0]++;
-            }
-            break;
-        case '<':
-            cell_pointer--;
-            if(enable_profile)
-            {
-                instruction_count_table[1]++;
-            }
-            break;
-        case '+':
-            need_to_access_cell(cell_pointer);
-            tape[cell_pointer]++;
-            if(enable_profile)
-            {
-                instruction_count_table[2]++;
-            }      
-            break;
-        case '-':
-            need_to_access_cell(cell_pointer);
-            tape[cell_pointer]--;
-            if(enable_profile)
-            {
-                instruction_count_table[3]++;
-            }
-            break;
-        case '.':
-            need_to_access_cell(cell_pointer);
-            printf("%c", tape[cell_pointer]); // output the value of the current cell
-            if(enable_profile)
-            {
-                instruction_count_table[4]++;
-                has_io = true;
-            }  
-            break;
-        case ',':
-            need_to_access_cell(cell_pointer);
-            need_to_access_cell(cell_pointer+1);
-            tape[cell_pointer] = tape[cell_pointer + 1];
-            if(enable_profile)
-            {
-                instruction_count_table[5]++;
-                has_io = true;
-            }
-            break;
-        case '[':
-            need_to_access_cell(cell_pointer);
-            if (tape[cell_pointer] == 0)
-            {
-                if(enable_profile)
-                {
-                    instruction_count_table[6]++;
-                }
-                bool find_matched = false;
-                unsigned int jump_markers = 1;
-                for (unsigned long i = program_counter + 1; i < instructions.size(); i++)
-                {
-                    if (instructions[i] == '[')
-                    {
-                        jump_markers++;
-                    }
-                    else if (instructions[i] == ']')
-                    {
-                        jump_markers--;
-                        if (jump_markers == 0)
-                        {
-                            program_counter = i - 1; // minus 1 because we inc it at the end of loop
-                            find_matched = true;
-                            break;
-                        }
-                    }
-                }
-                if(!find_matched) std::abort(); // [ cannot be matched
-            }
-            if(enable_profile)
-            {
-                current_loop.start = program_counter;
-                old_pointer = cell_pointer;
-                old_p_0 = tape[cell_pointer];
-                has_io = false;
-            }
-            break;
-        case ']':
-            need_to_access_cell(cell_pointer);
-            if (tape[cell_pointer] != 0)
-            {
-                instruction_count_table[7]++;
-                bool find_matched = false;
-                unsigned int jump_markers = 1;
-                for (unsigned long i = program_counter - 1; i >= 0; i--)
-                {
-                    if (instructions[i] == ']')
-                    {
-                        jump_markers++;
-                    }
-                    else if (instructions[i] == '[')
-                    {
-                        jump_markers--;
-                        if (jump_markers == 0)
-                        {
-                            if(enable_profile)
-                            {
-                                if(current_loop.start == i)
-                                {
-                                    // found innermost loop
-                                    if(current_loop.end != program_counter)
-                                    {
-                                        current_loop.end = program_counter;
-                                        current_loop.iter = 0;
-                                    }
-                                    current_loop.iter ++;
-
-                                    bool is_simple = true;
-                                    do {
-                                        if(has_io) {
-                                            is_simple = false;
-                                            break;
-                                        }
-                                        if(cell_pointer != old_pointer)
-                                        {
-                                            is_simple = false;
-                                            break;
-                                        }
-                                        auto new_p_0 = tape[cell_pointer];
-                                        if((old_p_0 - 1 != new_p_0) && (old_pointer + 1 != new_p_0))
-                                            is_simple = false;
-                                    }while (0);
-                                    current_loop.is_simple = is_simple;
-                                }
-                            }
-                            program_counter = i - 1; // minus 1 because we inc it at the end of loop
-                            find_matched = true;
-                            break;
-                        }
-                    }
-                }
-                if (!find_matched) std::abort(); // ] cannot be matched
-            }else{
-                if(enable_profile)
-                {
-                    if(current_loop.end == program_counter)
-                    {
-                        // found innermost loop
-                        if(current_loop.is_simple)
-                        {
-                            bool exist = false;
-                            for(auto & loop : simple_innermost_loops)
-                            {
-                                if(loop.end == current_loop.end)
-                                {
-                                    loop.iter = loop.iter + current_loop.iter + 1;
-                                    exist = true;
-                                    break;
-                                }
-                            }
-                            if(!exist)
-                            {
-                                simple_innermost_loops.emplace_back(current_loop.start,current_loop.end,current_loop.iter + 1);
-                            }
-                        }else{
-                            bool exist = false;
-                            for(auto & loop : innermost_loops)
-                            {
-                                if(loop.end == current_loop.end)
-                                {
-                                    loop.iter = loop.iter + current_loop.iter + 1;
-                                    exist = true;
-                                    break;
-                                }
-                            }
-                            if(!exist)
-                            {
-                                innermost_loops.emplace_back(current_loop.start,current_loop.end,current_loop.iter + 1);
-                            }
-                        }
-                    }
-                }
-            }
-            break;
-        default:
-            break;
-        }
-        program_counter++;
-    }
+    //execute_original_block( 0, instructions);
+    block_executer main_block(0);
+    main_block.execute(instructions);
+    
     if(enable_profile)
     {
         printf("\n");
