@@ -27,7 +27,7 @@
 #define OP_BRANCH 4
 #define OP_BACK 5
 #define OP_INC_OFF 6 //tape[op1] += op2
-#define OP_MAD_OFF 7//tape[op1] += tape[0] * op2
+#define OP_MDA_OFF 7//tape[op1] += tape[0] * op2
 #define OP_ST 8//tape[0] = op1
 
 struct inter_inst
@@ -194,7 +194,7 @@ inst_stream pass3(const inst_stream& input_stream)
                     {
                         if(input_stream[k].op_code == OP_INC_OFF)
                         {
-                            opt_output_stream.emplace_back(OP_MAD_OFF,input_stream[k].operand1,input_stream[k].operand2);
+                            opt_output_stream.emplace_back(OP_MDA_OFF,input_stream[k].operand1,input_stream[k].operand2);
                         }
                     }
                     opt_output_stream.emplace_back(OP_ST,0);
@@ -249,7 +249,7 @@ inst_stream preprocess(const std::string& original_instruction_stream)
     return stream;
 }
 
-std::ostringstream assembler(const inst_stream& input_stream)
+std::ostringstream compile(const inst_stream& input_stream)
 {
     std::ostringstream asm_builder;
     // append assembly header
@@ -327,7 +327,7 @@ std::ostringstream assembler(const inst_stream& input_stream)
                 asm_builder << "\tstrb    w8, [x9]\n";
             }
             break;
-        case OP_MAD_OFF:
+        case OP_MDA_OFF:
             asm_builder << "\tmov     w10, #" << abs(inst.operand2) <<"\t\t; MAD_OFF " << inst.operand1 << ", " << inst.operand2 <<"\n";
             asm_builder << "\tmul     w11, w10, w20\n";
             assert(inst.operand1 != 0);
@@ -427,7 +427,7 @@ int main(int argc, char* argv[])
 
     auto inter_inst_stream = preprocess(instructions);
 
-    auto asm_builder = assembler(inter_inst_stream);
+    auto asm_builder = compile(inter_inst_stream);
 
     // write result to file
     std::ofstream outputFile("output.s");
