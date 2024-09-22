@@ -8,3 +8,4 @@ set(CMAKE_CXX_STANDARD 17)
 
 # Add executable
 add_executable(bfi main.cpp)
+add_executable(bfc compiler/main.cpp)
