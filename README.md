@@ -22,7 +22,7 @@ bfi [-p] <filename> // -p enable profile
 ### Compiler
 Work on MacOS with m1 chip(armv8-64bit)
 ```bash
-bfc [-p] <filename> // generate output.s
+bfc <filename> // generate output.s
 ```
 Link generated assemly with c_main.c
 ```bash
