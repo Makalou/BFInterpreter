@@ -7,5 +7,6 @@ int main()
 {
     char* tape = (char*)calloc(4096, sizeof(char));
     bf_main(tape);
+    free(tape);
     return 0;
 }
