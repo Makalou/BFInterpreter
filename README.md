@@ -15,6 +15,20 @@ cd build
 cmake ..
 ```
 ## Usage
+### Interpreter
 ```bash
 bfi [-p] <filename> // -p enable profile
+```
+### Compiler
+Work on MacOS with m1 chip(armv8-64bit)
+```bash
+bfc [-p] <filename> // generate output.s
+```
+Link generated assemly with c_main.c
+```bash
+gcc -O3 ../compiler/c_main.c output.s -o exe_name
+```
+Run executable
+```bash
+./exe_name
 ```
