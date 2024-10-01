@@ -29,6 +29,7 @@
 #define OP_INC_OFF 6 //tape[op1] += op2
 #define OP_MDA_OFF 7//tape[op1] += tape[0] * op2
 #define OP_ST 8//tape[0] = op1
+#define OP_MEM_SCAN 9
 
 struct inter_inst
 {
@@ -213,6 +214,35 @@ inst_stream pass4(const inst_stream& input_stream)
     inst_stream opt_output_stream;
     for(const auto & inst : input_stream)
     {
+        if(opt_output_stream.size() > 2)
+        {
+            if(inst.op_code == OP_BACK)
+            {
+                auto size = opt_output_stream.size();
+                if(opt_output_stream[size - 2].op_code == OP_BRANCH && opt_output_stream[size - 1].op_code == OP_MV )
+                {
+                    if(opt_output_stream[size - 1].operand1 == 1)
+                    {
+                        printf("trigger!\n");
+                        auto m = opt_output_stream[size - 1].operand1;
+                        opt_output_stream.pop_back();
+                        opt_output_stream.pop_back();
+                        opt_output_stream.emplace_back(OP_MEM_SCAN,m);
+                        continue;
+                    }
+                }
+            }
+        }
+        opt_output_stream.emplace_back(inst);
+    }
+    return opt_output_stream;
+}
+
+inst_stream pass5(const inst_stream& input_stream)
+{
+    inst_stream opt_output_stream;
+    for(const auto & inst : input_stream)
+    {
         if(!opt_output_stream.empty())
         {
             if(inst.op_code == OP_INC)
@@ -283,28 +313,34 @@ std::ostringstream compile(const inst_stream& input_stream)
         {
         case OP_MV:
             assert(inst.operand1 != 0);
-            asm_builder << "\tstrb    w20, [x19]\t\t; MV " << inst.operand1 <<"\n";
+            //asm_builder << "\tstrb    w20, [x19]\t\t; MV " << inst.operand1 <<"\n";
+            asm_builder << "\tldr    x19, [sp, #8]\t\t; MV " << inst.operand1 <<"\n";
             if(inst.operand1 > 0)
             {
                 asm_builder << "\tadd     x19, x19, #" << abs(inst.operand1) << "\n";
             }else{
                 asm_builder << "\tsubs     x19, x19, #" << abs(inst.operand1) << "\n";
             }
-            asm_builder << "\tldrb    w20, [x19]\n";
+            asm_builder << "\tstr    x19, [sp, #8]\n";
             break;
         case OP_INC:
             assert(inst.operand1 != 0);
             asm_builder << "\tmov     w10, #" << abs(inst.operand1) << "\t\t; INC " << inst.operand1 <<"\n";
+            asm_builder << "\tldr     x19, [sp, #8]\n";
+            asm_builder << "\tldrb    w20, [x19]\n";
             if(inst.operand1 > 0)
             {
                 asm_builder << "\tadd     w20, w20, w10\n";
             }else{
                 asm_builder << "\tsubs     w20, w20, w10\n";
             }
+            asm_builder << "\tstrb    w20, [x19]\n";
+            asm_builder << "\tstr     x19, [sp, #8]\n";
             break;
         case OP_INC_OFF:
             // TODO: how large is op1 and op2?
             assert(inst.operand1 != 0);
+            asm_builder << "\tldr     x19, [sp, #8]\n";
             if(inst.operand1 > 0)
             {
                 asm_builder << "\tldr     w8, [x19, #" << inst.operand1 << "]\t\t; INC_OFF " << inst.operand1 << ", " << inst.operand2 <<"\n";
@@ -328,7 +364,9 @@ std::ostringstream compile(const inst_stream& input_stream)
             }
             break;
         case OP_MDA_OFF:
-            asm_builder << "\tmov     w10, #" << abs(inst.operand2) <<"\t\t; MAD_OFF " << inst.operand1 << ", " << inst.operand2 <<"\n";
+            asm_builder << "\tldr     x19, [sp, #8]\n";
+            asm_builder << "\tldrb    w20, [x19]\n";
+            asm_builder << "\tmov     w10, #" << abs(inst.operand2) <<"\t\t; MDA_OFF " << inst.operand1 << ", " << inst.operand2 <<"\n";
             asm_builder << "\tmul     w11, w10, w20\n";
             assert(inst.operand1 != 0);
             if(inst.operand1 > 0)
@@ -354,24 +392,35 @@ std::ostringstream compile(const inst_stream& input_stream)
             }
             break;
         case OP_ST:
+            asm_builder << "\tldr     x19, [sp, #8]\n";
+            asm_builder << "\tldrb    w20, [x19]\n";
             if(inst.operand1 == 0)
             {
                 asm_builder << "\tmov     w20, #0\t\t; ST 0\n";
             }else{
                 char st = 0;
                 st += inst.operand1;
-                asm_builder << "\tmov     w20, #" << static_cast<int>(st) << "\t\t; ST " << inst.operand1 <<"\n";
+                int c = (unsigned char)st;
+                asm_builder << "\tmov     w20, #" << c << "\t\t; ST " << inst.operand1 <<"\n";
             }
+            asm_builder << "\tstrb    w20, [x19]\n";
             break;
         case OP_WRITE:
-            asm_builder << "\tstrb w20, [x19]\t\t; WRITE \n";
+            //asm_builder << "\tstrb w20, [x19]\t\t; WRITE \n";
+            asm_builder << "\tldr     x19, [sp, #8]\n";
             asm_builder << "\tldrsb	w0, [x19]\n";
+            //asm_builder << "\tstr	x19, [sp, #8]\n"; // save x19
             asm_builder << "\tbl	_putchar\n"; // call c library putchar function
+            //asm_builder << "\tldr	x19, [sp, #8]\n"; // load x19
+            //asm_builder << "\tldrb	w20, [x19]\n"; // load w20
             break;
         case OP_READ:
-            asm_builder << "\tbl	_getchar\t\t; READ\n"; // call c library getchar function
-            asm_builder << "\tldr	x19, [sp, #8]\n";
-            asm_builder << "\tstrb	w0, [x19]\n";
+            //asm_builder << "\tstr	x19, [sp, #8]\t\t; READ\n"; // save x19
+            asm_builder << "\tbl	_getchar\n"; // call c library getchar function
+            //asm_builder << "\tldr	x19, [sp, #8]\n"; // load x19
+            //asm_builder << "\tmov	w20, w0\n";
+            asm_builder << "\tldr     x19, [sp, #8]\n";
+            asm_builder << "\tstrb    w0, [x19]\n";
             break;
         case OP_BRANCH:
             loop_header = current_label++;
@@ -379,9 +428,41 @@ std::ostringstream compile(const inst_stream& input_stream)
             loop_exit_label_stack.push_back(loop_exit);
             asm_builder << "\tb     " << "LBB0_" << loop_header <<"\n";
             asm_builder << "LBB0_" << loop_header << ":\n";
+            asm_builder << "\tldr     x19, [sp, #8]\n";
+            asm_builder << "\tldrb    w20, [x19]\n";
             asm_builder << "\tcbz     w20, " << "LBB0_" << loop_exit << "\n";
             break;
         case OP_BACK:
+            loop_exit = loop_exit_label_stack.back();
+            loop_exit_label_stack.pop_back();
+            asm_builder << "\tb     " << "LBB0_" << loop_exit - 1 << "\n";
+            asm_builder << "LBB0_" << loop_exit << ":\n"; 
+            break;
+        case OP_MEM_SCAN:
+            asm_builder << "\tadrp    x9, _indices@PAGE\n";
+            asm_builder << "\tldr     q0, [x9, _indices@PAGEOFF]\n";
+            loop_header = current_label++;
+            loop_exit = current_label++;
+            loop_exit_label_stack.push_back(loop_exit);
+            asm_builder << "\tb     " << "LBB0_" << loop_header <<"\n";
+            asm_builder << "LBB0_" << loop_header << ":\n";
+            asm_builder << "\tldr     x19, [sp, #8]\n";
+            asm_builder << "\tldrb    w20, [x19]\n";
+            asm_builder << "\tcbz     w20, " << "LBB0_" << loop_exit << "\n";
+
+            asm_builder << "\tldr     x19, [sp, #8]\n";
+            asm_builder << "\tldr     q1, [x19]\n";
+            asm_builder << "\tcmeq.16b     v1, v1, #0\n";
+            asm_builder << "\tand.16b     v2, v0, v1\n";
+            asm_builder << "\torn.16b     v1, v2, v1\n";
+            asm_builder << "\tuminv   b8, v1.16b\n";
+            asm_builder << "\tfmov    w10, s8\n";
+            asm_builder << "\tmov     w9, #16\n";
+            asm_builder << "\tcmp     w10, #255\n";
+            asm_builder << "\tcsel    w10, w9, w10, eq\n";
+            asm_builder << "\tadd     x19, x19, x10\n";
+            asm_builder << "\tstr     x19, [sp, #8]\n";
+
             loop_exit = loop_exit_label_stack.back();
             loop_exit_label_stack.pop_back();
             asm_builder << "\tb     " << "LBB0_" << loop_exit - 1 << "\n";
@@ -399,8 +480,11 @@ std::ostringstream compile(const inst_stream& input_stream)
     asm_builder << "\tadd	sp, sp, #32\n";
     asm_builder << "\tret\n";
     asm_builder << "                                    ; -- End function\n";
-    asm_builder << ".subsections_via_symbols\n";
-
+    asm_builder << "\t.section	__DATA,__data\n";
+    asm_builder << "\t.globl	_indices                        ; @indices\n";
+    asm_builder << "_indices:\n";
+    asm_builder << "\t.byte 0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16\n";
+    asm_builder << ".subsections_via_symbols\n\n";
     return asm_builder;
 }
 
@@ -428,6 +512,8 @@ int main(int argc, char* argv[])
     auto inter_inst_stream = preprocess(instructions);
 
     auto asm_builder = compile(inter_inst_stream);
+
+    printf("compiled\n");
 
     // write result to file
     std::ofstream outputFile("output.s");

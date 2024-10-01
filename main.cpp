@@ -134,8 +134,8 @@ int main(int argc, char* argv[])
             break;
         case ',':
             need_to_access_cell(cell_pointer);
-            need_to_access_cell(cell_pointer+1);
-            tape[cell_pointer] = tape[cell_pointer + 1];
+            //need_to_access_cell(cell_pointer+1);
+            tape[cell_pointer] = getchar();
             if(enable_profile)
             {
                 instruction_count_table[5]++;
