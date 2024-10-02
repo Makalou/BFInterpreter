@@ -221,9 +221,10 @@ inst_stream pass4(const inst_stream& input_stream)
                 auto size = opt_output_stream.size();
                 if(opt_output_stream[size - 2].op_code == OP_BRANCH && opt_output_stream[size - 1].op_code == OP_MV )
                 {
-                    if(opt_output_stream[size - 1].operand1 == 1)
+                    auto m = opt_output_stream[size - 1].operand1;
+                    if(m == 1 || m == 2 || m == 4)
                     {
-                        printf("trigger!\n");
+                        //printf("trigger %d !\n",m);
                         auto m = opt_output_stream[size - 1].operand1;
                         opt_output_stream.pop_back();
                         opt_output_stream.pop_back();
@@ -439,8 +440,21 @@ std::ostringstream compile(const inst_stream& input_stream)
             asm_builder << "LBB0_" << loop_exit << ":\n"; 
             break;
         case OP_MEM_SCAN:
-            asm_builder << "\tadrp    x9, _indices@PAGE\n";
-            asm_builder << "\tldr     q0, [x9, _indices@PAGEOFF]\n";
+            if(inst.operand1 == 1)
+            {
+                asm_builder << "\tadrp    x9, _indices@PAGE\n";
+                asm_builder << "\tldr     q0, [x9, _indices@PAGEOFF]\n";
+            }else if (inst.operand1 == 2) {
+                asm_builder << "\tadrp    x9, _indices2@PAGE\n";
+                asm_builder << "\tldr     q0, [x9, _indices2@PAGEOFF]\n";
+                asm_builder << "\tadrp    x9, _filters2@PAGE\n";
+                asm_builder << "\tldr     q3, [x9, _filters2@PAGEOFF]\n";
+            }else if (inst.operand1 == 4) {
+                asm_builder << "\tadrp    x9, _indices3@PAGE\n";
+                asm_builder << "\tldr     q0, [x9, _indices3@PAGEOFF]\n";
+                asm_builder << "\tadrp    x9, _filters3@PAGE\n";
+                asm_builder << "\tldr     q3, [x9, _filters3@PAGEOFF]\n";
+            }
             loop_header = current_label++;
             loop_exit = current_label++;
             loop_exit_label_stack.push_back(loop_exit);
@@ -452,13 +466,53 @@ std::ostringstream compile(const inst_stream& input_stream)
 
             asm_builder << "\tldr     x19, [sp, #8]\n";
             asm_builder << "\tldr     q1, [x19]\n";
-            asm_builder << "\tcmeq.16b     v1, v1, #0\n";
+
+            if(inst.operand1 == 2 || inst.operand1 == 4)
+            {
+                asm_builder << "\tand.16b     v1, v3, v1\n";
+            }
+
+            if(inst.operand1 == 1)
+            {
+                asm_builder << "\tcmeq.16b     v1, v1, #0\n";
+            }else if(inst.operand1 == 2)
+            {
+                asm_builder << "\tcmeq.8h     v1, v1, #0\n";
+            }else if(inst.operand1 == 4)
+            {
+                asm_builder << "\tcmeq.4s     v1, v1, #0\n";
+            }
+
             asm_builder << "\tand.16b     v2, v0, v1\n";
             asm_builder << "\torn.16b     v1, v2, v1\n";
-            asm_builder << "\tuminv   b8, v1.16b\n";
+
+            if(inst.operand1 == 1)
+            {
+                asm_builder << "\tuminv   b8, v1.16b\n";
+            }else if(inst.operand1 == 2)
+            {
+                asm_builder << "\tuminv   h8, v1.8h\n";
+            }else if(inst.operand1 == 4)
+            {
+                asm_builder << "\tuminv   s8, v1.4s\n";
+            }   
+
             asm_builder << "\tfmov    w10, s8\n";
             asm_builder << "\tmov     w9, #16\n";
-            asm_builder << "\tcmp     w10, #255\n";
+
+            if(inst.operand1 == 1)
+            {
+                asm_builder << "\tcmp     w10, #255\n";
+            }else if(inst.operand1 == 2)
+            {
+                asm_builder << "\tmov     w25, #65535\n";
+                asm_builder << "\tcmp     w10, w25\n";
+            }else if(inst.operand1 == 4)
+            {
+                asm_builder << "\tmov     w25, #4294967295\n";
+                asm_builder << "\tcmp     w10, w25\n";
+            }   
+
             asm_builder << "\tcsel    w10, w9, w10, eq\n";
             asm_builder << "\tadd     x19, x19, x10\n";
             asm_builder << "\tstr     x19, [sp, #8]\n";
@@ -480,10 +534,30 @@ std::ostringstream compile(const inst_stream& input_stream)
     asm_builder << "\tadd	sp, sp, #32\n";
     asm_builder << "\tret\n";
     asm_builder << "                                    ; -- End function\n";
+
     asm_builder << "\t.section	__DATA,__data\n";
     asm_builder << "\t.globl	_indices                        ; @indices\n";
     asm_builder << "_indices:\n";
-    asm_builder << "\t.byte 0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16\n";
+    asm_builder << "\t.byte 0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0\n";
+
+    asm_builder << "\t.globl	_indices2                       ; @indices2\n";
+    asm_builder << "_indices2:\n";
+    //asm_builder << "\t.byte 0, 0, 0, 2, 0, 4, 0, 6, 0, 8, 0, 10, 0, 12, 0, 14, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0\n";
+    asm_builder << "\t.byte 0, 0, 2, 0, 4, 0, 6, 0, 8, 0, 10, 0, 12, 0, 14, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0\n";
+
+    asm_builder << "\t.globl	_indices3                       ; @indices3\n";
+    asm_builder << "_indices3:\n";
+    asm_builder << "\t.byte 0, 0, 0, 0, 0, 0, 0, 4, 0, 0, 0, 8, 0, 0, 0, 12, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0\n";  
+
+    asm_builder << "\t.globl	_filters2                       ; @filters2\n";
+    asm_builder << "_filters2:\n";
+    asm_builder << "\t.byte 255, 0, 255, 0, 255, 0, 255, 0, 255, 0, 255, 0, 255, 0, 255, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0\n";
+    //asm_builder << "\t.byte 0, 255, 0, 255, 0, 255, 0, 255, 0, 255, 0, 255, 0, 255, 0, 255, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0\n";
+
+    asm_builder << "\t.globl	_filters3                       ; @filters3\n";
+    asm_builder << "_filters3:\n";
+    asm_builder << "\t.byte 255, 0, 0, 0, 255, 0, 0, 0, 255, 0, 0, 0, 255, 0, 0, 0\n";
+
     asm_builder << ".subsections_via_symbols\n\n";
     return asm_builder;
 }
@@ -513,7 +587,7 @@ int main(int argc, char* argv[])
 
     auto asm_builder = compile(inter_inst_stream);
 
-    printf("compiled\n");
+    //printf("compiled\n");
 
     // write result to file
     std::ofstream outputFile("output.s");
