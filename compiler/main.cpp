@@ -222,7 +222,7 @@ inst_stream pass4(const inst_stream& input_stream)
                 if(opt_output_stream[size - 2].op_code == OP_BRANCH && opt_output_stream[size - 1].op_code == OP_MV )
                 {
                     auto m = opt_output_stream[size - 1].operand1;
-                    if(m == 1 || m == 2 || m == 4)
+                    if(m == 1 || m == 2 || m == 4 || m == -1 || m == -2 || m == -4)
                     {
                         //printf("trigger %d !\n",m);
                         auto m = opt_output_stream[size - 1].operand1;
@@ -394,7 +394,7 @@ std::ostringstream compile(const inst_stream& input_stream)
             break;
         case OP_ST:
             asm_builder << "\tldr     x19, [sp, #8]\n";
-            asm_builder << "\tldrb    w20, [x19]\n";
+            //asm_builder << "\tldrb    w20, [x19]\n";
             if(inst.operand1 == 0)
             {
                 asm_builder << "\tmov     w20, #0\t\t; ST 0\n";
@@ -454,6 +454,19 @@ std::ostringstream compile(const inst_stream& input_stream)
                 asm_builder << "\tldr     q0, [x9, _indices3@PAGEOFF]\n";
                 asm_builder << "\tadrp    x9, _filters3@PAGE\n";
                 asm_builder << "\tldr     q3, [x9, _filters3@PAGEOFF]\n";
+            }else if (inst.operand1 == -1) {
+                asm_builder << "\tadrp    x9, _indices_r@PAGE\n";
+                asm_builder << "\tldr     q0, [x9, _indices_r@PAGEOFF]\n";
+            }else if (inst.operand1 == -2) {
+                asm_builder << "\tadrp    x9, _indices2_r@PAGE\n";
+                asm_builder << "\tldr     q0, [x9, _indices2_r@PAGEOFF]\n";
+                asm_builder << "\tadrp    x9, _filters2_r@PAGE\n";
+                asm_builder << "\tldr     q3, [x9, _filters2_r@PAGEOFF]\n";
+            }else if (inst.operand1 == -4) {
+                asm_builder << "\tadrp    x9, _indices3_r@PAGE\n";
+                asm_builder << "\tldr     q0, [x9, _indices3_r@PAGEOFF]\n";
+                asm_builder << "\tadrp    x9, _filters3_r@PAGE\n";
+                asm_builder << "\tldr     q3, [x9, _filters3_r@PAGEOFF]\n";
             }
             loop_header = current_label++;
             loop_exit = current_label++;
@@ -465,20 +478,25 @@ std::ostringstream compile(const inst_stream& input_stream)
             asm_builder << "\tcbz     w20, " << "LBB0_" << loop_exit << "\n";
 
             asm_builder << "\tldr     x19, [sp, #8]\n";
-            asm_builder << "\tldr     q1, [x19]\n";
+            if(inst.operand1 > 0)
+            {
+                asm_builder << "\tldr     q1, [x19]\n";
+            }else{
+                asm_builder << "\tldr     q1, [x19, #-15]\n";
+            }
 
-            if(inst.operand1 == 2 || inst.operand1 == 4)
+            if(inst.operand1 == 2 || inst.operand1 == 4 || inst.operand1 == -2 || inst.operand1 == -4)
             {
                 asm_builder << "\tand.16b     v1, v3, v1\n";
             }
 
-            if(inst.operand1 == 1)
+            if(inst.operand1 == 1 || inst.operand1 == -1)
             {
                 asm_builder << "\tcmeq.16b     v1, v1, #0\n";
-            }else if(inst.operand1 == 2)
+            }else if(inst.operand1 == 2 || inst.operand1 == -2)
             {
                 asm_builder << "\tcmeq.8h     v1, v1, #0\n";
-            }else if(inst.operand1 == 4)
+            }else if(inst.operand1 == 4 || inst.operand1 == -4)
             {
                 asm_builder << "\tcmeq.4s     v1, v1, #0\n";
             }
@@ -486,13 +504,13 @@ std::ostringstream compile(const inst_stream& input_stream)
             asm_builder << "\tand.16b     v2, v0, v1\n";
             asm_builder << "\torn.16b     v1, v2, v1\n";
 
-            if(inst.operand1 == 1)
+            if(inst.operand1 == 1 || inst.operand1 == -1)
             {
                 asm_builder << "\tuminv   b8, v1.16b\n";
-            }else if(inst.operand1 == 2)
+            }else if(inst.operand1 == 2 || inst.operand1 == -2)
             {
                 asm_builder << "\tuminv   h8, v1.8h\n";
-            }else if(inst.operand1 == 4)
+            }else if(inst.operand1 == 4 || inst.operand1 == -4)
             {
                 asm_builder << "\tuminv   s8, v1.4s\n";
             }   
@@ -500,21 +518,27 @@ std::ostringstream compile(const inst_stream& input_stream)
             asm_builder << "\tfmov    w10, s8\n";
             asm_builder << "\tmov     w9, #16\n";
 
-            if(inst.operand1 == 1)
+            if(inst.operand1 == 1 || inst.operand1 == -1)
             {
                 asm_builder << "\tcmp     w10, #255\n";
-            }else if(inst.operand1 == 2)
+            }else if(inst.operand1 == 2 || inst.operand1 == -2)
             {
                 asm_builder << "\tmov     w25, #65535\n";
                 asm_builder << "\tcmp     w10, w25\n";
-            }else if(inst.operand1 == 4)
+            }else if(inst.operand1 == 4 || inst.operand1 == -4)
             {
                 asm_builder << "\tmov     w25, #4294967295\n";
                 asm_builder << "\tcmp     w10, w25\n";
             }   
 
             asm_builder << "\tcsel    w10, w9, w10, eq\n";
-            asm_builder << "\tadd     x19, x19, x10\n";
+            if(inst.operand1 >0)
+            {
+                asm_builder << "\tadd     x19, x19, x10\n";
+            }else{
+                asm_builder << "\tsubs     x19, x19, x10\n";
+            }
+        
             asm_builder << "\tstr     x19, [sp, #8]\n";
 
             loop_exit = loop_exit_label_stack.back();
@@ -538,25 +562,43 @@ std::ostringstream compile(const inst_stream& input_stream)
     asm_builder << "\t.section	__DATA,__data\n";
     asm_builder << "\t.globl	_indices                        ; @indices\n";
     asm_builder << "_indices:\n";
-    asm_builder << "\t.byte 0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0\n";
+    asm_builder << "\t.byte 0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0\n";
+
+    asm_builder << "\t.globl	_indices_r                      ; @indices_r\n";
+    asm_builder << "_indices_r:\n";
+    asm_builder << "\t.byte 15, 14, 13, 12, 11, 10, 9, 8, 7, 6, 5, 4, 3, 2, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0\n";
 
     asm_builder << "\t.globl	_indices2                       ; @indices2\n";
     asm_builder << "_indices2:\n";
-    //asm_builder << "\t.byte 0, 0, 0, 2, 0, 4, 0, 6, 0, 8, 0, 10, 0, 12, 0, 14, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0\n";
     asm_builder << "\t.byte 0, 0, 2, 0, 4, 0, 6, 0, 8, 0, 10, 0, 12, 0, 14, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0\n";
+
+    asm_builder << "\t.globl	_indices2_r                     ; @indices2_r\n";
+    asm_builder << "_indices2_r:\n";
+    asm_builder << "\t.byte 14, 0, 12, 0, 10, 0, 8, 0, 6, 0, 4, 0, 2, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0\n";
 
     asm_builder << "\t.globl	_indices3                       ; @indices3\n";
     asm_builder << "_indices3:\n";
     asm_builder << "\t.byte 0, 0, 0, 0, 0, 0, 0, 4, 0, 0, 0, 8, 0, 0, 0, 12, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0\n";  
 
+    asm_builder << "\t.globl	_indices3_r                     ; @indices3_r\n";
+    asm_builder << "_indices3_r:\n";
+    asm_builder << "\t.byte 0, 0, 0, 12, 0, 0, 0, 8, 0, 0, 0, 4, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0\n";  
+
     asm_builder << "\t.globl	_filters2                       ; @filters2\n";
     asm_builder << "_filters2:\n";
     asm_builder << "\t.byte 255, 0, 255, 0, 255, 0, 255, 0, 255, 0, 255, 0, 255, 0, 255, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0\n";
-    //asm_builder << "\t.byte 0, 255, 0, 255, 0, 255, 0, 255, 0, 255, 0, 255, 0, 255, 0, 255, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0\n";
+
+    asm_builder << "\t.globl	_filters2_r                     ; @filters2_r\n";
+    asm_builder << "_filters2_r:\n";
+    asm_builder << "\t.byte 0, 255, 0, 255, 0, 255, 0, 255, 0, 255, 0, 255, 0, 255, 0, 255, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0\n";
 
     asm_builder << "\t.globl	_filters3                       ; @filters3\n";
     asm_builder << "_filters3:\n";
-    asm_builder << "\t.byte 255, 0, 0, 0, 255, 0, 0, 0, 255, 0, 0, 0, 255, 0, 0, 0\n";
+    asm_builder << "\t.byte 255, 0, 0, 0, 255, 0, 0, 0, 255, 0, 0, 0, 255, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0\n";
+
+    asm_builder << "\t.globl	_filters3_r                     ; @filters3_r\n";
+    asm_builder << "_filters3_r:\n";
+    asm_builder << "\t.byte 0, 0, 0, 255, 0, 0, 0, 255, 0, 0, 0, 255, 0, 0, 0, 255, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0\n";
 
     asm_builder << ".subsections_via_symbols\n\n";
     return asm_builder;
