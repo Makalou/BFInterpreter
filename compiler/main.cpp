@@ -30,15 +30,19 @@
 #define OP_MDA_OFF 7//tape[op1] += tape[0] * op2
 #define OP_ST 8//tape[0] = op1
 #define OP_MEM_SCAN 9
+#define OP_ST_OFF 10 // tape[op1] = op2
+#define OP_NONE 11 // do nothing
 
 struct inter_inst
 {
     char op_code;
     int operand1;
     int operand2;
+    int operand3;
     inter_inst(int _code) : op_code(_code),operand1(0),operand2(0){};
     inter_inst(int _code, int _operand1) : op_code(_code),operand1(_operand1),operand2(0){};
     inter_inst(int _code, int _operand1, int _operand2) : op_code(_code),operand1(_operand1),operand2(_operand2){};
+    inter_inst(int _code, int _operand1, int _operand2, int _operand3) : op_code(_code),operand1(_operand1),operand2(_operand2),operand3(_operand3){};
 };
 
 using inst_stream = std::vector<inter_inst>;
@@ -151,67 +155,6 @@ inst_stream pass2(const inst_stream& input_stream)
 inst_stream pass3(const inst_stream& input_stream)
 {
     inst_stream opt_output_stream;
-    for(auto i = 0; i < input_stream.size();i++)
-    {
-        auto & inst = input_stream[i];
-        if(inst.op_code == OP_BRANCH)
-        {
-            bool find_innermost_loop = false;
-            auto flag = 0;
-            auto j = i + 1;
-            for(; j < input_stream.size(); j++)
-            {
-                const auto & inst2 = input_stream[j];
-                if(inst2.op_code == OP_BRANCH)
-                {
-                    break;
-                }else if (inst2.op_code == OP_BACK) {
-                    find_innermost_loop = true;
-                    break;
-                }
-            }
-
-            if(find_innermost_loop)
-            {
-               int delta = 0;
-               bool is_simple = true;
-               for(int k = i + 1; k < j; k++)
-               {    
-                    const auto & inst2 = input_stream[k];
-                    if(inst2.op_code != OP_INC && inst2.op_code != OP_INC_OFF)
-                    {
-                        is_simple = false;
-                        break;
-                    }
-                    if(inst2.op_code == OP_INC)
-                    {
-                        delta += inst2.operand1;
-                    }
-               }
-
-               if(is_simple && (delta == 1 || delta == -1))
-               {
-                    for(int k = i + 1; k < j; k++)
-                    {
-                        if(input_stream[k].op_code == OP_INC_OFF)
-                        {
-                            opt_output_stream.emplace_back(OP_MDA_OFF,input_stream[k].operand1,input_stream[k].operand2);
-                        }
-                    }
-                    opt_output_stream.emplace_back(OP_ST,0);
-                    i = j; //jump to loop end
-                    continue;
-               }
-            }
-        }
-        opt_output_stream.emplace_back(inst);
-    }
-    return opt_output_stream;
-}
-
-inst_stream pass4(const inst_stream& input_stream)
-{
-    inst_stream opt_output_stream;
     for(const auto & inst : input_stream)
     {
         if(opt_output_stream.size() > 2)
@@ -239,8 +182,76 @@ inst_stream pass4(const inst_stream& input_stream)
     return opt_output_stream;
 }
 
+inst_stream pass4(const inst_stream& input_stream, bool & fixed_point)
+{
+    inst_stream opt_output_stream;
+    fixed_point = true;
+    for(auto i = 0; i < input_stream.size();i++)
+    {
+        auto & inst = input_stream[i];
+        if(inst.op_code == OP_BRANCH)
+        {
+            bool find_innermost_loop = false;
+            auto flag = 0;
+            auto j = i + 1;
+            for(; j < input_stream.size(); j++)
+            {
+                const auto & inst2 = input_stream[j];
+                if(inst2.op_code == OP_BRANCH)
+                {
+                    break;
+                }else if (inst2.op_code == OP_BACK) {
+                    find_innermost_loop = true;
+                    break;
+                }
+            }
+
+            if(find_innermost_loop)
+            {
+               int delta = 0;
+               bool is_simple = true;
+               for(int k = i + 1; k < j; k++)
+               {    
+                    const auto & inst2 = input_stream[k];
+                    if(inst2.op_code != OP_INC && inst2.op_code != OP_INC_OFF && inst2.op_code != OP_ST_OFF)
+                    {
+                        is_simple = false;
+                        break;
+                    }
+                    if(inst2.op_code == OP_INC)
+                    {
+                        delta += inst2.operand1;
+                    }
+               }
+
+               if(is_simple && (delta == -1 || delta == 1))
+               {
+                    fixed_point = false;
+                    for(int k = i + 1; k < j; k++)
+                    {
+                        if(input_stream[k].op_code == OP_INC_OFF)
+                        {
+                            opt_output_stream.emplace_back(OP_MDA_OFF,input_stream[k].operand1,input_stream[k].operand2,delta);
+                        }
+                        if(input_stream[k].op_code == OP_ST_OFF)
+                        {
+                            opt_output_stream.push_back(input_stream[k]);
+                        }
+                    }
+                    opt_output_stream.emplace_back(OP_ST,0);
+                    i = j; //jump to loop end
+                    continue;
+               }
+            }
+        }
+        opt_output_stream.emplace_back(inst);
+    }
+    return opt_output_stream;
+}
+
 inst_stream pass5(const inst_stream& input_stream)
 {
+    // ST merge
     inst_stream opt_output_stream;
     for(const auto & inst : input_stream)
     {
@@ -251,12 +262,33 @@ inst_stream pass5(const inst_stream& input_stream)
                 bool find = false;
                 for(auto i = opt_output_stream.size() - 1; i >= 0; i--)
                 {
-                    if(opt_output_stream[i].op_code != OP_INC_OFF)
+                    if(opt_output_stream[i].op_code != OP_INC_OFF || opt_output_stream[i].op_code != OP_ST_OFF)
                     {
                         if(opt_output_stream[i].op_code == OP_ST)
                         {
                             find = true;
                             opt_output_stream[i].operand1 += inst.operand1;
+                            //printf("trigger : ST %d\n",opt_output_stream[i].operand1);
+                        }
+                        break;
+                    }
+                }
+                if(find)
+                    continue;
+            }
+
+            if(inst.op_code == OP_ST)
+            {
+                bool find = false;
+                for(auto i = opt_output_stream.size() - 1; i >= 0; i--)
+                {
+                    if(opt_output_stream[i].op_code != OP_INC_OFF || opt_output_stream[i].op_code != OP_ST_OFF)
+                    {
+                        if(opt_output_stream[i].op_code == OP_ST || opt_output_stream[i].op_code == OP_INC)
+                        {
+                            find = true;
+                            opt_output_stream[i] = inst;
+                            //printf("trigger : ST cover\n");
                         }
                         break;
                     }
@@ -270,13 +302,47 @@ inst_stream pass5(const inst_stream& input_stream)
     return opt_output_stream;
 }
 
+inst_stream pass6(const inst_stream& input_stream)
+{
+    inst_stream opt_output_stream;
+    for(const auto & inst : input_stream)
+    {
+        if(opt_output_stream.size() > 2)
+        {
+            if(inst.op_code == OP_MV)
+            {
+                auto size = opt_output_stream.size();
+                if(opt_output_stream[size - 2].op_code == OP_MV && opt_output_stream[size - 1].op_code == OP_ST)
+                {
+                    //printf("trigger ST_OFF\n");
+                    auto m1 = opt_output_stream[size - 2].operand1;
+                    auto m2 = opt_output_stream[size - 1].operand1;
+                    opt_output_stream.pop_back();
+                    opt_output_stream.pop_back();
+                    opt_output_stream.emplace_back(OP_ST_OFF,m1,m2);
+                    if(m1 + inst.operand1 != 0)
+                        opt_output_stream.emplace_back(OP_MV,m1 + inst.operand1);
+                    continue;
+                }
+            }
+        }
+        opt_output_stream.emplace_back(inst);
+    }
+    return opt_output_stream;
+}
+
 inst_stream preprocess(const std::string& original_instruction_stream)
 {
     auto stream = pass0(original_instruction_stream);
     stream = pass1(stream);
     stream = pass2(stream);
     stream = pass3(stream);
-    stream = pass4(stream);
+    bool fix_point = false;
+    while (!fix_point) {
+        stream = pass4(stream,fix_point);
+        stream = pass5(stream);
+        stream = pass6(stream);
+    }
     return stream;
 }
 
@@ -367,6 +433,11 @@ std::ostringstream compile(const inst_stream& input_stream)
         case OP_MDA_OFF:
             asm_builder << "\tldr     x19, [sp, #8]\n";
             asm_builder << "\tldrb    w20, [x19]\n";
+            if(inst.operand3 == 1)
+            {
+                asm_builder << "\tmov     w8, #256\n";
+                asm_builder << "\tsubs    w20, w8, w20\n";
+            }
             asm_builder << "\tmov     w10, #" << abs(inst.operand2) <<"\t\t; MDA_OFF " << inst.operand1 << ", " << inst.operand2 <<"\n";
             asm_builder << "\tmul     w11, w10, w20\n";
             assert(inst.operand1 != 0);
@@ -405,6 +476,20 @@ std::ostringstream compile(const inst_stream& input_stream)
                 asm_builder << "\tmov     w20, #" << c << "\t\t; ST " << inst.operand1 <<"\n";
             }
             asm_builder << "\tstrb    w20, [x19]\n";
+            break;
+        case OP_ST_OFF:
+            asm_builder << "\tldr     x19, [sp, #8]\n";
+            //asm_builder << "\tldrb    w20, [x19]\n";
+            if(inst.operand2 == 0)
+            {
+                asm_builder << "\tmov     w20, #0\t\t; ST 0\n";
+            }else{
+                char st = 0;
+                st += inst.operand2;
+                int c = (unsigned char)st;
+                asm_builder << "\tmov     w20, #" << c << "\t\t; ST " << inst.operand2 <<"\n";
+            }
+            asm_builder << "\tstrb    w20, [x19, #" << inst.operand1 <<" ]\n";
             break;
         case OP_WRITE:
             //asm_builder << "\tstrb w20, [x19]\t\t; WRITE \n";
@@ -629,7 +714,7 @@ int main(int argc, char* argv[])
 
     auto asm_builder = compile(inter_inst_stream);
 
-    //printf("compiled\n");
+    printf("compiled\n");
 
     // write result to file
     std::ofstream outputFile("output.s");
