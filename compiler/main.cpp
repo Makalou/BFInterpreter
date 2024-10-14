@@ -31,7 +31,6 @@
 #define OP_ST 8//tape[0] = op1
 #define OP_MEM_SCAN 9
 #define OP_ST_OFF 10 // tape[op1] = op2
-#define OP_NONE 11 // do nothing
 
 struct inter_inst
 {
@@ -157,7 +156,7 @@ inst_stream pass3(const inst_stream& input_stream)
     inst_stream opt_output_stream;
     for(const auto & inst : input_stream)
     {
-        if(opt_output_stream.size() > 2)
+        if(opt_output_stream.size() >= 2)
         {
             if(inst.op_code == OP_BACK)
             {
@@ -165,7 +164,7 @@ inst_stream pass3(const inst_stream& input_stream)
                 if(opt_output_stream[size - 2].op_code == OP_BRANCH && opt_output_stream[size - 1].op_code == OP_MV )
                 {
                     auto m = opt_output_stream[size - 1].operand1;
-                    if(m == 1 || m == 2 || m == 4 || m == -1 || m == -2 || m == -4)
+                    if(m == 1 || m == 2 || m == -1 || m == -2 )
                     {
                         //printf("trigger %d !\n",m);
                         auto m = opt_output_stream[size - 1].operand1;
@@ -235,7 +234,8 @@ inst_stream pass4(const inst_stream& input_stream, bool & fixed_point)
                         }
                         if(input_stream[k].op_code == OP_ST_OFF)
                         {
-                            opt_output_stream.push_back(input_stream[k]);
+                            opt_output_stream.emplace_back(OP_ST_OFF,input_stream[k].operand1,input_stream[k].operand2);
+                            //printf("trigger cascading innermost loop\n");
                         }
                     }
                     opt_output_stream.emplace_back(OP_ST,0);
@@ -307,7 +307,7 @@ inst_stream pass6(const inst_stream& input_stream)
     inst_stream opt_output_stream;
     for(const auto & inst : input_stream)
     {
-        if(opt_output_stream.size() > 2)
+        if(opt_output_stream.size() >= 2)
         {
             if(inst.op_code == OP_MV)
             {
@@ -331,6 +331,52 @@ inst_stream pass6(const inst_stream& input_stream)
     return opt_output_stream;
 }
 
+void print_instructions(const inst_stream& input_stream)
+{
+    std::string prefix = "";
+    for(const auto & inst : input_stream)
+    {
+        switch (inst.op_code) {
+            case OP_MV :
+            printf("%sMV %d\n",prefix.c_str(),inst.operand1);
+            break;
+            case OP_INC :
+            printf("%sINC %d\n",prefix.c_str(),inst.operand1);
+            break;
+            case OP_WRITE :
+            printf("%sWRITE\n",prefix.c_str());
+            break;
+            case OP_READ :
+            printf("%sREAD\n",prefix.c_str());
+            break;
+            case OP_BRANCH :
+            printf("%s[\n",prefix.c_str());
+            prefix+="  ";
+            break;
+            case OP_BACK :
+            prefix.pop_back();
+            prefix.pop_back();
+            printf("%s]\n",prefix.c_str());
+            break;
+            case OP_INC_OFF : //tape[op1] += op2
+            printf("%sINC_OFF %d, %d\n",prefix.c_str(),inst.operand1, inst.operand2);
+            break;
+            case OP_MDA_OFF ://tape[op1] += tape[0] * op2
+            printf("%sMDA_OFF %d, %d\n",prefix.c_str(),inst.operand1, inst.operand2);
+            break;
+            case OP_ST ://tape[0] = op1
+            printf("%sST %d\n",prefix.c_str(),inst.operand1);
+            break;
+            case OP_MEM_SCAN :
+            printf("%sMEM_SCAN %d\n",prefix.c_str(),inst.operand1);
+            break;
+            case OP_ST_OFF : // tape[op1] = op2
+            printf("%sST_OFF %d, %d\n",prefix.c_str(),inst.operand1, inst.operand2);
+            break;
+        }
+    }
+}
+
 inst_stream preprocess(const std::string& original_instruction_stream)
 {
     auto stream = pass0(original_instruction_stream);
@@ -338,11 +384,16 @@ inst_stream preprocess(const std::string& original_instruction_stream)
     stream = pass2(stream);
     stream = pass3(stream);
     bool fix_point = false;
-    while (!fix_point) {
+    stream = pass4(stream,fix_point);
+    stream = pass5(stream);
+    stream = pass6(stream);
+    bool enable_fix_point = false;
+    while (enable_fix_point && !fix_point) {
         stream = pass4(stream,fix_point);
         stream = pass5(stream);
         stream = pass6(stream);
     }
+    //print_instructions(stream);
     return stream;
 }
 
@@ -402,7 +453,6 @@ std::ostringstream compile(const inst_stream& input_stream)
                 asm_builder << "\tsubs     w20, w20, w10\n";
             }
             asm_builder << "\tstrb    w20, [x19]\n";
-            asm_builder << "\tstr     x19, [sp, #8]\n";
             break;
         case OP_INC_OFF:
             // TODO: how large is op1 and op2?
@@ -410,7 +460,7 @@ std::ostringstream compile(const inst_stream& input_stream)
             asm_builder << "\tldr     x19, [sp, #8]\n";
             if(inst.operand1 > 0)
             {
-                asm_builder << "\tldr     w8, [x19, #" << inst.operand1 << "]\t\t; INC_OFF " << inst.operand1 << ", " << inst.operand2 <<"\n";
+                asm_builder << "\tldrb     w8, [x19, #" << inst.operand1 << "]\t\t; INC_OFF " << inst.operand1 << ", " << inst.operand2 <<"\n";
             }else{
                 asm_builder << "\tsubs    x9, x19, #" << abs(inst.operand1) << "\t\t; INC_OFF " << inst.operand1 << ", " << inst.operand2 <<"\n";
                 asm_builder << "\tldrb    w8, [x9]\n";
@@ -465,7 +515,6 @@ std::ostringstream compile(const inst_stream& input_stream)
             break;
         case OP_ST:
             asm_builder << "\tldr     x19, [sp, #8]\n";
-            //asm_builder << "\tldrb    w20, [x19]\n";
             if(inst.operand1 == 0)
             {
                 asm_builder << "\tmov     w20, #0\t\t; ST 0\n";
@@ -478,8 +527,7 @@ std::ostringstream compile(const inst_stream& input_stream)
             asm_builder << "\tstrb    w20, [x19]\n";
             break;
         case OP_ST_OFF:
-            asm_builder << "\tldr     x19, [sp, #8]\n";
-            //asm_builder << "\tldrb    w20, [x19]\n";
+            asm_builder << "\tldr     x19, [sp, #8]\t\t; ST_OFF "<< inst.operand1 <<"," <<inst.operand2 << "\n";
             if(inst.operand2 == 0)
             {
                 asm_builder << "\tmov     w20, #0\t\t; ST 0\n";
@@ -714,7 +762,7 @@ int main(int argc, char* argv[])
 
     auto asm_builder = compile(inter_inst_stream);
 
-    printf("compiled\n");
+    //printf("compiled\n");
 
     // write result to file
     std::ofstream outputFile("output.s");
