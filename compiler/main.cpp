@@ -378,16 +378,36 @@ std::ostringstream compile(const inst_stream& input_stream)
                 asm_builder << "\tmov	 w0,  #" << inst.operand1 << "\n";
                 asm_builder << "\tbl	_putchar\n"; // call c library putchar function
                 break;
+            case OP_WRITE_ADDR:
+                asm_builder << "\tldrsb    w0, [x19, #" << inst.operand1 << "]\n";
+                asm_builder << "\tbl	_putchar\n"; // call c library putchar function
+                break;
+            case OP_READ_ADDR:
+                asm_builder << "\tbl	_getchar\n"; // call c library getchar function
+                asm_builder << "\tstrb    w0, [x19, #" << inst.operand1 << "]\n";
+                break;
             case OP_ST_P:
-                asm_builder << "\tmov    x19, #" << inst.operand1 << "\n";
+                asm_builder << "\tmov    x18, #" << inst.operand1 << "\n";
+                asm_builder << "\tadd    x19, x19, x18\n";
                 asm_builder << "\tstr    x19, [sp, #8]\n";
                 break;
             case OP_ST_ADDR:
-                asm_builder << "\tmov    x19, #" << inst.operand1 << "\n";
                 asm_builder << "\tmov    w20, #" << inst.operand2 << "\n";
-                asm_builder << "\tstrb    w20, [x19]\n";
+                asm_builder << "\tstrb    w20, [x19, #" << inst.operand1 << "]\n";
+                break;
+            case OP_INC_ADDR:
+                asm_builder << "\tmov     w10, #" << abs(inst.operand2) << "\n";
+                asm_builder << "\tldrb    w20, [x19, #" << inst.operand1 << "]\n";
+                if(inst.operand1 > 0)
+                {
+                    asm_builder << "\tadd     w20, w20, w10\n";
+                }else{
+                    asm_builder << "\tsubs     w20, w20, w10\n";
+                }
+                asm_builder << "\tstrb    w20, [x19, #" << inst.operand1 << "]\n";
                 break;
         default:
+            throw std::runtime_error("unknown IR\n");
             break;
         }
     }

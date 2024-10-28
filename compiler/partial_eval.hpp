@@ -153,7 +153,7 @@ bool partial_eval_loop(const inst_stream &input_stream, int start, int n, int *e
                     if(!cell->second.tainted)
                     {
                         current_state.instructions.emplace_back(OP_WRITE_IMM,cell->second.val);
-                        putchar(cell->second.val);
+                        //putchar(cell->second.val);
                     }else{
                         current_state.instructions.emplace_back(OP_WRITE_ADDR,current_state.pointer);
                     }
@@ -190,8 +190,6 @@ bool partial_eval_loop(const inst_stream &input_stream, int start, int n, int *e
                             partial_eval_state copy_state;
                             copy_state.pointer = current_state.pointer;
                             copy_state.cell_states = current_state.cell_states;
-                            //partial_eval_state delta_state;
-                            //delta_state.pointer = current_state.pointer;
                             if(partial_eval_loop(input_stream,i + 1,n,end,copy_state))
                             {
                                 // If success, we accept the partial evaluation result
@@ -319,7 +317,7 @@ inst_stream partial_eval(const inst_stream& input_stream)
 
     if(end < input_stream.size() - 1)
     {
-        opt_stream.emplace_back(OP_ST_P,eval_state.pointer);
+
         for(const auto & cell : eval_state.cell_states)
         {
             if(!cell.second.tainted && cell.second.val!=0)
@@ -328,6 +326,8 @@ inst_stream partial_eval(const inst_stream& input_stream)
                 opt_stream.emplace_back(OP_ST_ADDR,cell.first,cell.second.val);
             }
         }
+
+        opt_stream.emplace_back(OP_ST_P,eval_state.pointer);
 
         for(int i = end; i < input_stream.size(); i ++)
         {
