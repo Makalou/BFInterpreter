@@ -14,6 +14,13 @@
 #define OP_ST 8//tape[0] = op1
 #define OP_MEM_SCAN 9
 #define OP_ST_OFF 10 // tape[op1] = op2
+#define OP_ST_P 11
+#define OP_INC_ADDR 12
+#define OP_WRITE_ADDR 13
+#define OP_WRITE_IMM 14
+#define OP_READ_ADDR 15
+#define OP_ST_ADDR 16
+#define OP_MDA_ADDR 17 //tape[op1] += tape[op2] * op3
 
 struct inter_inst
 {

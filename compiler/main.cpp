@@ -10,7 +10,9 @@
 #include <iostream>
 #include <algorithm>
 
+#include "ir.hpp"
 #include "optimize_pass.hpp"
+#include "partial_eval.hpp"
 /*
  * >  move the pointer right
  * <  move the pointer left
@@ -74,6 +76,8 @@ inst_stream preprocess(const std::string& original_instruction_stream)
     stream = pass1(stream);
     stream = pass2(stream);
     stream = pass3(stream);
+    stream = partial_eval(stream);
+    return stream;
     bool fix_point = false;
     stream = pass4(stream,fix_point);
     stream = pass5(stream);
@@ -370,6 +374,19 @@ std::ostringstream compile(const inst_stream& input_stream)
             asm_builder << "\tb     " << "LBB0_" << loop_exit - 1 << "\n";
             asm_builder << "LBB0_" << loop_exit << ":\n"; 
             break;
+            case OP_WRITE_IMM:
+                asm_builder << "\tmov	 w0,  #" << inst.operand1 << "\n";
+                asm_builder << "\tbl	_putchar\n"; // call c library putchar function
+                break;
+            case OP_ST_P:
+                asm_builder << "\tmov    x19, #" << inst.operand1 << "\n";
+                asm_builder << "\tstr    x19, [sp, #8]\n";
+                break;
+            case OP_ST_ADDR:
+                asm_builder << "\tmov    x19, #" << inst.operand1 << "\n";
+                asm_builder << "\tmov    w20, #" << inst.operand2 << "\n";
+                asm_builder << "\tstrb    w20, [x19]\n";
+                break;
         default:
             break;
         }
