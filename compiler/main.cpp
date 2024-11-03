@@ -13,6 +13,17 @@
 #include "ir.hpp"
 #include "optimize_pass.hpp"
 #include "partial_eval.hpp"
+
+#include "llvm/IR/BasicBlock.h"
+#include "llvm/IR/Constants.h"
+#include "llvm/IR/DerivedTypes.h"
+#include "llvm/IR/Function.h"
+#include "llvm/IR/IRBuilder.h"
+#include "llvm/IR/LLVMContext.h"
+#include "llvm/IR/Module.h"
+#include "llvm/IR/Type.h"
+#include "llvm/IR/Verifier.h"
+
 /*
  * >  move the pointer right
  * <  move the pointer left
@@ -74,10 +85,11 @@ inst_stream preprocess(const std::string& original_instruction_stream)
 {
     auto stream = pass0(original_instruction_stream);
     stream = pass1(stream);
+    return stream;
     stream = pass2(stream);
     stream = pass3(stream);
-    stream = partial_eval(stream);
-    return stream;
+    //stream = partial_eval(stream);
+
     bool fix_point = false;
     stream = pass4(stream,fix_point);
     stream = pass5(stream);
@@ -465,6 +477,134 @@ std::ostringstream compile(const inst_stream& input_stream)
     return asm_builder;
 }
 
+std::ostringstream generate_llvm_ir(const inst_stream& input_stream)
+{
+    auto context = std::make_unique<llvm::LLVMContext>();
+    auto module = std::make_unique<llvm::Module>("bf module",*context);
+    auto builder = std::make_unique<llvm::IRBuilder<>>(*context);
+
+    auto *putcharType = llvm::FunctionType::get(llvm::Type::getInt32Ty(*context), llvm::Type::getInt32Ty(*context), false);
+    auto *putcharFunc = llvm::Function::Create(putcharType, llvm::Function::ExternalLinkage, "putchar", module.get());
+
+    auto *getcharType = llvm::FunctionType::get(llvm::Type::getInt32Ty(*context), false);
+    auto *getcharFunc = llvm::Function::Create(getcharType, llvm::Function::ExternalLinkage, "getchar", module.get());
+
+    auto *FT = llvm::FunctionType::get(llvm::Type::getVoidTy(*context),llvm::PointerType::get(llvm::Type::getInt8Ty(*context),0),false);
+    auto *bf_main = llvm::Function::Create(FT,llvm::Function::ExternalLinkage,"bf_main",module.get());
+
+    // Create a new basic block to start insertion into.
+    auto *BB = llvm::BasicBlock::Create(*context, "bf_entry", bf_main);
+    builder->SetInsertPoint(BB);
+
+    //llvm::Value * cell_pointer = builder->CreateConstGEP1_32(llvm::Type::getInt8Ty(*context), bf_main->getArg(0), 0);
+    llvm::Value *cell_pointer = builder->CreateAlloca(llvm::PointerType::get(llvm::Type::getInt8Ty(*context),0), nullptr);
+    builder->CreateStore(bf_main->getArg(0), cell_pointer);
+
+    std::vector<llvm::BasicBlock*> bb_stack;
+    int global_bb_label = 0;
+
+    for(const auto & inst : input_stream)
+    {
+        switch (inst.op_code) {
+            case OP_MV :
+            {
+                llvm::Value *currentP = builder->CreateLoad(llvm::PointerType::get(llvm::Type::getInt8Ty(*context),0), cell_pointer);
+                llvm::Value *incValue = llvm::ConstantInt::get(llvm::Type::getInt32Ty(*context), inst.operand1);
+                auto * result = builder->CreateGEP(llvm::Type::getInt8Ty(*context),currentP, incValue);
+                builder->CreateStore(result, cell_pointer);
+                break;
+            }
+            case OP_INC :
+            {
+                llvm::Value *currentP = builder->CreateLoad(llvm::PointerType::get(llvm::Type::getInt8Ty(*context),0), cell_pointer);
+                llvm::Value *cellValue = builder->CreateLoad(llvm::Type::getInt8Ty(*context), currentP);
+                llvm::Value *incValue = llvm::ConstantInt::get(llvm::Type::getInt8Ty(*context), inst.operand1);
+                llvm::Value *res = builder->CreateAdd(cellValue, incValue);
+                builder->CreateStore(res, currentP);
+                break;
+            }
+            case OP_WRITE :
+            {
+                llvm::Value *currentP = builder->CreateLoad(llvm::PointerType::get(llvm::Type::getInt8Ty(*context),0), cell_pointer);
+                llvm::Value *cellValue = builder->CreateLoad(llvm::Type::getInt8Ty(*context), currentP);
+                cellValue = builder->CreateZExt(cellValue, llvm::Type::getInt32Ty(*context));
+                builder->CreateCall(putcharFunc, cellValue);
+                break;
+            }
+            case OP_READ :
+            {
+                llvm::Value *currentP = builder->CreateLoad(llvm::PointerType::get(llvm::Type::getInt8Ty(*context),0), cell_pointer);
+                llvm::Value *inputValue = builder->CreateCall(getcharFunc, {});
+                inputValue = builder->CreateTrunc(inputValue, llvm::Type::getInt8Ty(*context));
+                builder->CreateStore(inputValue, currentP);
+                break;
+            }
+            case OP_BRANCH :
+            {
+                auto *loopCondBB = llvm::BasicBlock::Create(*context,"LBB"+std::to_string(global_bb_label++), bf_main);
+                auto *loopBodyBB = llvm::BasicBlock::Create(*context,"LBB"+std::to_string(global_bb_label++), bf_main);
+                auto *loopExitBB = llvm::BasicBlock::Create(*context,"LBB"+std::to_string(global_bb_label++), bf_main);
+                bb_stack.push_back(loopCondBB);
+                bb_stack.push_back(loopExitBB);
+
+                builder->CreateBr(loopCondBB);
+                builder->SetInsertPoint(loopCondBB);
+                llvm::Value *currentP = builder->CreateLoad(llvm::PointerType::get(llvm::Type::getInt8Ty(*context),0), cell_pointer);
+                llvm::Value *cellValue = builder->CreateLoad(llvm::Type::getInt8Ty(*context), currentP);
+                llvm::Value *isNotZero = builder->CreateICmpNE(cellValue, llvm::ConstantInt::get(llvm::Type::getInt8Ty(*context), 0));
+                builder->CreateCondBr(isNotZero, loopBodyBB, loopExitBB);
+
+                builder->SetInsertPoint(loopBodyBB);
+                break;
+            }
+            case OP_BACK :
+            {
+                auto *loopExitBB = bb_stack.back();
+                bb_stack.pop_back();
+                auto *loopCondBB = bb_stack.back();
+                bb_stack.pop_back();
+                builder->CreateBr(loopCondBB);
+                builder->SetInsertPoint(loopExitBB);
+                break;
+            }
+            case OP_INC_OFF : //tape[op1] += op2
+            {
+                break;
+            }
+            case OP_MDA_OFF ://tape[op1] += tape[0] * op2
+            {
+                break;
+            }
+            case OP_ST ://tape[0] = op1
+            {
+                break;
+            }
+            default:
+                throw std::runtime_error("unknown instruction");
+        }
+    }
+
+    // Add a `ret void` instruction as the terminator
+    builder->CreateRetVoid();
+
+    //module->print(llvm::outs(), nullptr,true);
+
+    auto res = llvm::verifyModule(*module, &llvm::errs());
+    assert(!res);
+
+    std::ostringstream ir_stream;
+    std::string ir_str;
+    llvm::raw_string_ostream os(ir_str);
+    module->print(os, nullptr,true);
+    ir_stream << os.str();
+    return ir_stream;
+}
+
+std::ostringstream llvm_ir_to_asm(const inst_stream& input_stream)
+{
+
+}
+
 int main(int argc, char* argv[])
 {
     if (argc < 2) {
@@ -488,12 +628,12 @@ int main(int argc, char* argv[])
 
     auto inter_inst_stream = preprocess(instructions);
 
-    auto asm_builder = compile(inter_inst_stream);
-
+    //auto asm_builder = compile(inter_inst_stream);
+    auto asm_builder = generate_llvm_ir(inter_inst_stream);
     //printf("compiled\n");
 
     // write result to file
-    std::ofstream outputFile("output.s");
+    std::ofstream outputFile("output.ll");
     if (outputFile.is_open()) {
         outputFile << asm_builder.str();  
         outputFile.close();
