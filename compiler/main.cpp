@@ -23,6 +23,7 @@
 #include "llvm/IR/Module.h"
 #include "llvm/IR/Type.h"
 #include "llvm/IR/Verifier.h"
+#include "llvm/Passes/PassBuilder.h"
 
 /*
  * >  move the pointer right
@@ -85,12 +86,16 @@ inst_stream preprocess(const std::string& original_instruction_stream)
 {
     auto stream = pass0(original_instruction_stream);
     stream = pass1(stream);
-    return stream;
     stream = pass2(stream);
+    bool fix_point = false;
+    stream = pass4(stream,fix_point);
+    stream = pass5(stream);
+    stream = pass6(stream);
+    return stream;
     stream = pass3(stream);
     //stream = partial_eval(stream);
 
-    bool fix_point = false;
+    //bool fix_point = false;
     stream = pass4(stream,fix_point);
     stream = pass5(stream);
     stream = pass6(stream);
@@ -531,6 +536,56 @@ std::ostringstream generate_llvm_ir(const inst_stream& input_stream)
                 builder->CreateCall(putcharFunc, cellValue);
                 break;
             }
+            case OP_INC_OFF : //tape[op1] += op2
+            {
+                llvm::Value *currentP = builder->CreateLoad(llvm::PointerType::get(llvm::Type::getInt8Ty(*context),0), cell_pointer);
+                llvm::Value *offsetValue = llvm::ConstantInt::get(llvm::Type::getInt32Ty(*context), inst.operand1);
+                llvm::Value *offsetPtr = builder->CreateGEP(llvm::Type::getInt8Ty(*context),currentP, offsetValue);
+                llvm::Value *cellValue = builder->CreateLoad(llvm::Type::getInt8Ty(*context), offsetPtr);
+                llvm::Value *incValue = llvm::ConstantInt::get(llvm::Type::getInt8Ty(*context), inst.operand2);
+                llvm::Value *res = builder->CreateAdd(cellValue,incValue);
+                builder->CreateStore(res, offsetPtr);
+                break;
+            }
+            case OP_MDA_OFF ://tape[op1] += tape[0] * op2
+            {
+                llvm::Value *currentP = builder->CreateLoad(llvm::PointerType::get(llvm::Type::getInt8Ty(*context),0), cell_pointer);
+                llvm::Value *cellValue = builder->CreateLoad(llvm::Type::getInt8Ty(*context), currentP);
+                llvm::Value *offsetValue = llvm::ConstantInt::get(llvm::Type::getInt32Ty(*context), inst.operand1);
+                llvm::Value *offsetPtr = builder->CreateGEP(llvm::Type::getInt8Ty(*context),currentP, offsetValue);
+
+                llvm::Value *cell1Value = builder->CreateLoad(llvm::Type::getInt8Ty(*context), offsetPtr);
+
+                llvm::Value *multipler = llvm::ConstantInt::get(llvm::Type::getInt8Ty(*context), inst.operand2);
+
+                if(inst.operand3 == 1)
+                {
+                    llvm::Value *c = llvm::ConstantInt::get(llvm::Type::getInt8Ty(*context), 256);
+                    cellValue = builder->CreateSub(c,cellValue);
+                }
+
+                llvm::Value *res1 = builder->CreateMul(cellValue,multipler);
+
+                llvm::Value *res2 = builder->CreateAdd(cell1Value,res1);
+                builder->CreateStore(res2, offsetPtr);
+                break;
+            }
+            case OP_ST ://tape[0] = op1
+            {
+                llvm::Value *currentP = builder->CreateLoad(llvm::PointerType::get(llvm::Type::getInt8Ty(*context),0), cell_pointer);
+                llvm::Value *storeValue = llvm::ConstantInt::get(llvm::Type::getInt8Ty(*context), inst.operand1);
+                builder->CreateStore(storeValue, currentP);
+                break;
+            }
+            case OP_ST_OFF: //tape[op1] = op2
+            {
+                llvm::Value *currentP = builder->CreateLoad(llvm::PointerType::get(llvm::Type::getInt8Ty(*context),0), cell_pointer);
+                llvm::Value *offsetValue = llvm::ConstantInt::get(llvm::Type::getInt32Ty(*context), inst.operand1);
+                llvm::Value *offsetPtr = builder->CreateGEP(llvm::Type::getInt8Ty(*context),currentP, offsetValue);
+                llvm::Value *storeValue = llvm::ConstantInt::get(llvm::Type::getInt8Ty(*context), inst.operand2);
+                builder->CreateStore(storeValue, offsetPtr);
+                break;
+            }
             case OP_READ :
             {
                 llvm::Value *currentP = builder->CreateLoad(llvm::PointerType::get(llvm::Type::getInt8Ty(*context),0), cell_pointer);
@@ -567,18 +622,6 @@ std::ostringstream generate_llvm_ir(const inst_stream& input_stream)
                 builder->SetInsertPoint(loopExitBB);
                 break;
             }
-            case OP_INC_OFF : //tape[op1] += op2
-            {
-                break;
-            }
-            case OP_MDA_OFF ://tape[op1] += tape[0] * op2
-            {
-                break;
-            }
-            case OP_ST ://tape[0] = op1
-            {
-                break;
-            }
             default:
                 throw std::runtime_error("unknown instruction");
         }
@@ -592,10 +635,42 @@ std::ostringstream generate_llvm_ir(const inst_stream& input_stream)
     auto res = llvm::verifyModule(*module, &llvm::errs());
     assert(!res);
 
+    // run optimize pipeline
+    // Create the analysis managers.
+// These must be declared in this order so that they are destroyed in the
+// correct order due to inter-analysis-manager references.
+    llvm::LoopAnalysisManager LAM;
+    llvm::FunctionAnalysisManager FAM;
+    llvm::CGSCCAnalysisManager CGAM;
+    llvm::ModuleAnalysisManager MAM;
+
+    // Create the new pass manager builder.
+    // Take a look at the PassBuilder constructor parameters for more
+    // customization, e.g. specifying a TargetMachine or various debugging
+    // options.
+    llvm::PassBuilder PB;
+
+    // Register all the basic analyses with the managers.
+    PB.registerModuleAnalyses(MAM);
+    PB.registerCGSCCAnalyses(CGAM);
+    PB.registerFunctionAnalyses(FAM);
+    PB.registerLoopAnalyses(LAM);
+    PB.crossRegisterProxies(LAM, FAM, CGAM, MAM);
+
+    // Create the pass manager.
+    // This one corresponds to a typical -O2 optimization pipeline.
+    llvm::ModulePassManager MPM = PB.buildPerModuleDefaultPipeline(llvm::OptimizationLevel::O2);
+
+    // Optimize the IR!
+    MPM.run(*module, MAM);
+
+    res = llvm::verifyModule(*module, &llvm::errs());
+    assert(!res);
+
     std::ostringstream ir_stream;
     std::string ir_str;
     llvm::raw_string_ostream os(ir_str);
-    module->print(os, nullptr,true);
+    module->print(os, nullptr,false);
     ir_stream << os.str();
     return ir_stream;
 }
