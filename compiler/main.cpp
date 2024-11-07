@@ -86,14 +86,17 @@ inst_stream preprocess(const std::string& original_instruction_stream)
 {
     auto stream = pass0(original_instruction_stream);
     stream = pass1(stream);
+    stream = partial_eval(stream);
+    return stream;
     stream = pass2(stream);
+    
     bool fix_point = false;
     stream = pass4(stream,fix_point);
     stream = pass5(stream);
     stream = pass6(stream);
     return stream;
     stream = pass3(stream);
-    //stream = partial_eval(stream);
+    
 
     //bool fix_point = false;
     stream = pass4(stream,fix_point);
@@ -620,6 +623,60 @@ std::ostringstream generate_llvm_ir(const inst_stream& input_stream)
                 bb_stack.pop_back();
                 builder->CreateBr(loopCondBB);
                 builder->SetInsertPoint(loopExitBB);
+                break;
+            }
+            case OP_WRITE_IMM:
+            {
+                llvm::Value *immValue = llvm::ConstantInt::get(llvm::Type::getInt32Ty(*context), inst.operand1);
+                builder->CreateCall(putcharFunc, immValue);
+                break;
+            }
+            case OP_WRITE_ADDR:
+            {
+                llvm::Value *baseP =  builder->CreateLoad(llvm::PointerType::get(llvm::Type::getInt8Ty(*context),0), cell_pointer);
+                llvm::Value *addrValue = llvm::ConstantInt::get(llvm::Type::getInt32Ty(*context), inst.operand1);
+                llvm::Value *targetP = builder->CreateGEP(llvm::Type::getInt8Ty(*context),baseP, addrValue);
+                llvm::Value *cellValue = builder->CreateLoad(llvm::Type::getInt8Ty(*context), targetP);
+                cellValue = builder->CreateZExt(cellValue, llvm::Type::getInt32Ty(*context));
+                builder->CreateCall(putcharFunc,cellValue);
+                break;
+            }
+            case OP_READ_ADDR:
+            {
+                llvm::Value *baseP =  builder->CreateLoad(llvm::PointerType::get(llvm::Type::getInt8Ty(*context),0), cell_pointer);
+                llvm::Value *addrValue = llvm::ConstantInt::get(llvm::Type::getInt32Ty(*context), inst.operand1);
+                llvm::Value *targetP = builder->CreateGEP(llvm::Type::getInt8Ty(*context),baseP, addrValue);
+                llvm::Value *inputValue = builder->CreateCall(getcharFunc, {});
+                inputValue = builder->CreateTrunc(inputValue, llvm::Type::getInt8Ty(*context));
+                builder->CreateStore(inputValue, targetP);
+                break;
+            }
+            case OP_ST_P:
+            {
+                llvm::Value *baseP =  builder->CreateLoad(llvm::PointerType::get(llvm::Type::getInt8Ty(*context),0), cell_pointer);
+                llvm::Value *addrValue = llvm::ConstantInt::get(llvm::Type::getInt32Ty(*context), inst.operand1);
+                llvm::Value *targetP = builder->CreateGEP(llvm::Type::getInt8Ty(*context),baseP, addrValue);
+                builder->CreateStore(targetP,cell_pointer);
+                break;
+            }
+            case OP_ST_ADDR:
+            {
+                llvm::Value *baseP =  builder->CreateLoad(llvm::PointerType::get(llvm::Type::getInt8Ty(*context),0), cell_pointer);
+                llvm::Value *addrValue = llvm::ConstantInt::get(llvm::Type::getInt32Ty(*context), inst.operand1);
+                llvm::Value *targetP = builder->CreateGEP(llvm::Type::getInt8Ty(*context),baseP, addrValue);
+                llvm::Value *storeValue = llvm::ConstantInt::get(llvm::Type::getInt32Ty(*context), inst.operand2);
+                builder->CreateStore(storeValue,targetP);
+                break;
+            }
+            case OP_INC_ADDR:
+            {
+                llvm::Value *baseP = builder->CreateLoad(llvm::PointerType::get(llvm::Type::getInt8Ty(*context),0), cell_pointer);
+                llvm::Value *addrValue = llvm::ConstantInt::get(llvm::Type::getInt32Ty(*context), inst.operand1);
+                llvm::Value *targetP = builder->CreateGEP(llvm::Type::getInt8Ty(*context),baseP, addrValue);
+                llvm::Value *cellValue = builder->CreateLoad(llvm::Type::getInt8Ty(*context), targetP);
+                llvm::Value *incValue = llvm::ConstantInt::get(llvm::Type::getInt8Ty(*context), inst.operand2);
+                llvm::Value *res = builder->CreateAdd(cellValue,incValue);
+                builder->CreateStore(res, targetP);
                 break;
             }
             default:
